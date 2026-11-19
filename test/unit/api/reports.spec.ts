@@ -1544,6 +1544,96 @@ describe("reports API", () => {
     });
   });
 
+  it("lists completed scopes with their latest report without a token", async () => {
+    await withApp(
+      async ({ app }) => {
+        const publicUrl = "https://reports.example.com";
+        const scopeUrl = (repo: string, branch: string) =>
+          `${publicUrl}/reports/latest?${new URLSearchParams({ repo, branch }).toString()}`;
+
+        let response = await requestBootstrap(app, "/api/projects/main-branch", {
+          method: "POST",
+          ...jsonBody({ mainBranch: "trunk", repo: OTHER_REPO }),
+        });
+        expect(response.status).toBe(200);
+
+        await publishHistoryPoint(app, "main-old", "main", "main-old");
+        await publishHistoryPoint(app, "main-new", "main", "main-new");
+        await publishHistoryPoint(app, "feature-1", "feature", "feature-1");
+        await publishHistoryPoint(app, "other-trunk", "trunk", "other-trunk", OTHER_REPO);
+
+        response = await requestAuthorized(app, "/api/reports/draft-only", {
+          method: "PUT",
+          ...jsonBody({ repo: REPO, branch: "draft-branch" }),
+        });
+        expect(response.status).toBe(200);
+
+        response = await app.request("/api/scopes");
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(await readJson(response)).toEqual({
+          scopes: [
+            {
+              repo: REPO,
+              branch: "feature",
+              mainBranch: "main",
+              latestUrl: scopeUrl(REPO, "feature"),
+              latest: {
+                id: "feature-1",
+                name: "feature-1",
+                completedAt: expect.any(String),
+                url: `${publicUrl}/feature-1`,
+              },
+            },
+            {
+              repo: REPO,
+              branch: "main",
+              mainBranch: "main",
+              latestUrl: scopeUrl(REPO, "main"),
+              latest: { id: "main-new", name: "main-new", completedAt: expect.any(String), url: `${publicUrl}/main-new` },
+            },
+            {
+              repo: OTHER_REPO,
+              branch: "trunk",
+              mainBranch: "trunk",
+              latestUrl: scopeUrl(OTHER_REPO, "trunk"),
+              latest: {
+                id: "other-trunk",
+                name: "other-trunk",
+                completedAt: expect.any(String),
+                url: `${publicUrl}/other-trunk`,
+              },
+            },
+          ],
+        });
+
+        response = await app.request(`/api/scopes?repo=${encodeURIComponent(OTHER_REPO)}`);
+        expect(response.status).toBe(200);
+        expect((await readJson<{ scopes: Array<{ branch: string }> }>(response)).scopes.map((s) => s.branch)).toEqual([
+          "trunk",
+        ]);
+
+        response = await app.request("/api/scopes?repo=unknown");
+        expect(response.status).toBe(200);
+        expect(await readJson(response)).toEqual({ scopes: [] });
+      },
+      { publicUrl: "https://reports.example.com" },
+    );
+  });
+
+  it("returns relative scope URLs when PUBLIC_URL is unset", async () => {
+    await withApp(async ({ app }) => {
+      await publishHistoryPoint(app, "only", "main", "only");
+
+      const response = await app.request("/api/scopes");
+      const { scopes } = await readJson<{ scopes: Array<{ latestUrl: string; latest: { url: string } }> }>(response);
+
+      expect(scopes).toHaveLength(1);
+      expect(scopes[0].latest.url).toBe("/only");
+      expect(scopes[0].latestUrl).toBe(`/reports/latest?repo=${encodeURIComponent(REPO)}&branch=main`);
+    });
+  });
+
   // Windows does not allow `"<>` in file names, so this case can only run on POSIX systems.
   it.skipIf(process.platform === "win32")("encodes plugin entrypoint redirects", async () => {
     await withApp(async ({ app }) => {

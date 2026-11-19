@@ -14,7 +14,7 @@ import { FsStore } from "./storage/fs.js";
 import { S3Store } from "./storage/s3.js";
 import { createErrorLog } from "./utils/error.js";
 import { normalizePublicUrl } from "./utils/http.js";
-import { cleanupReportRetention, parseRetentionPolicy } from "./utils/retention.js";
+import { cleanupReportRetention, isRetentionEnabled, parseRetentionPolicy } from "./utils/retention.js";
 
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "0.0.0.0";
@@ -183,13 +183,13 @@ const startRetentionSweep = (input: {
   fileStore: StaticFileStore;
   repositories: Parameters<typeof cleanupReportRetention>[0]["repositories"];
 }): ScheduledTask | undefined => {
-  if (retentionPolicy.maxReportsPerBranch === undefined && retentionPolicy.maxReportAgeMs === undefined) {
+  if (!isRetentionEnabled(retentionPolicy)) {
     return undefined;
   }
 
   const sweep = async () => {
     try {
-      await cleanupReportRetention({ ...input, policy: retentionPolicy });
+      await cleanupReportRetention({ ...input, mainBranch, policy: retentionPolicy });
     } catch (error: unknown) {
       console.error(createErrorLog("report retention sweep failed", error));
     }

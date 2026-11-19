@@ -33,6 +33,7 @@ import {
   mapProject,
   mapReport,
   renderReportsTreePage,
+  listLatestScopes,
 } from "./utils/reports.js";
 import { cleanupReportRetentionScope } from "./utils/retention.js";
 
@@ -621,6 +622,16 @@ export const createHttpApp = <Bindings extends object = Record<string, never>>(
     c.header("cache-control", "no-store");
 
     return c.redirect(view ? `${latest.url}#${view}` : latest.url);
+  });
+
+  app.get("/api/scopes", async (c) => {
+    const scopes = await listLatestScopes(c.get("repositories"), {
+      defaultMainBranch: c.get("mainBranch"),
+      publicUrl: c.get("publicUrl"),
+      repo: normalizeStringParam(c.req.query("repo")) ?? undefined,
+    });
+
+    return c.json({ scopes }, 200, { "cache-control": "no-store" });
   });
 
   app.all("/api/*", (c) => {

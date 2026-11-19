@@ -1,14 +1,16 @@
-import { sql, type Kysely } from "kysely";
+import { sql, type ExpressionBuilder, type Kysely } from "kysely";
 
 import type { AllureReportStorageDatabase, Report, ReportsTable } from "../model.js";
 import type {
   CompleteReportResult,
   CreateOrUpdateDraftInput,
   CreateOrUpdateDraftResult,
+  ListCompletedScopesQuery,
   ListHistoryQuery,
   ListReportsQuery,
   ListRetentionCandidatesQuery,
   ReportRepository,
+  StaleBranchQuery,
 } from "./api.js";
 
 const nowIso = () => new Date().toISOString();
@@ -278,13 +280,58 @@ export class KyselyReportRepository implements ReportRepository {
     return rows.map(mapRowToReport);
   }
 
-  async listCompletedScopes(): Promise<Array<{ branch: string; repo: string }>> {
-    return this.db
+  async listStaleBranchReports(query: StaleBranchQuery): Promise<Report[]> {
+    const rows = await this.db
+      .selectFrom("reports")
+      .selectAll()
+      .where((eb) =>
+        eb.and([
+          eb.exists(
+            eb
+              .selectFrom("reports as completed_reports")
+              .select("completed_reports.id")
+              .whereRef("completed_reports.repo", "=", "reports.repo")
+              .whereRef("completed_reports.branch", "=", "reports.branch")
+              .where("completed_reports.status", "=", "completed"),
+          ),
+          eb.not(eb.exists(this.selectFreshBranchReports(eb, query.thresholdIso))),
+        ]),
+      )
+      .orderBy("repo")
+      .orderBy("branch")
+      // Drafts first, then completed reports oldest first, so the newest completed report is deleted last.
+      .orderBy(sql`case when status = 'completed' then 1 else 0 end`)
+      .orderBy("completed_at", "asc")
+      .orderBy("id", "asc")
+      .execute();
+
+    return rows.map(mapRowToReport);
+  }
+
+  async deleteStaleBranchReport(report: Report, query: StaleBranchQuery): Promise<boolean> {
+    const result = await this.db
+      .deleteFrom("reports")
+      .where("id", "=", report.id)
+      .where("repo", "=", report.repo)
+      .where("branch", "=", report.branch)
+      .where((eb) => eb.not(eb.exists(this.selectFreshBranchReports(eb, query.thresholdIso))))
+      .executeTakeFirst();
+
+    return Number(result.numDeletedRows) > 0;
+  }
+
+  async listCompletedScopes(query: ListCompletedScopesQuery = {}): Promise<Array<{ branch: string; repo: string }>> {
+    let builder = this.db
       .selectFrom("reports")
       .select(["repo", "branch"])
       .distinct()
-      .where("status", "=", "completed")
-      .execute();
+      .where("status", "=", "completed");
+
+    if (query.repo) {
+      builder = builder.where("repo", "=", query.repo);
+    }
+
+    return builder.execute();
   }
 
   async findLatestByRepoAndBranch(repo: string, branch: string): Promise<Report | null> {
@@ -329,6 +376,26 @@ export class KyselyReportRepository implements ReportRepository {
       .on("reports")
       .columns(["status", "repo", "branch", "completed_at", "id"])
       .execute();
+  }
+
+  private selectFreshBranchReports(eb: ExpressionBuilder<AllureReportStorageDatabase, "reports">, thresholdIso: string) {
+    return eb
+      .selectFrom("reports as fresh_reports")
+      .select("fresh_reports.id")
+      .whereRef("fresh_reports.repo", "=", "reports.repo")
+      .whereRef("fresh_reports.branch", "=", "reports.branch")
+      .where((innerEb) =>
+        innerEb.or([
+          innerEb.and([
+            innerEb("fresh_reports.status", "=", "completed"),
+            innerEb("fresh_reports.completed_at", ">=", thresholdIso),
+          ]),
+          innerEb.and([
+            innerEb("fresh_reports.status", "=", "draft"),
+            innerEb("fresh_reports.updated_at", ">=", thresholdIso),
+          ]),
+        ]),
+      );
   }
 
   private async selectCompletedBranchHistory(repo: string, branch: string, limit?: number): Promise<ReportsTable[]> {

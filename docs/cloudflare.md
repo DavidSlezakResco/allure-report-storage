@@ -110,6 +110,20 @@ REPORT_RETENTION_MAX_REPORT_AGE_DAYS=30
 
 Both strategies can be enabled together. The Worker runs retention after report completion and through the scheduled cron in `wrangler.toml`. Retention does not change public history download limits or manual delete behavior.
 
+To also remove branches without recent reports (for example merged feature branches), enable stale branch retention:
+
+```bash
+REPORT_RETENTION_STALE_BRANCH_DAYS=30
+REPORT_RETENTION_PROTECTED_BRANCHES=master,dev
+REPORT_RETENTION_STALE_BRANCH_DRY_RUN=true
+```
+
+- `REPORT_RETENTION_STALE_BRANCH_DAYS`: delete all reports of a branch whose newest completed report is older than this positive number of days. A branch with a draft updated within that period is skipped.
+- `REPORT_RETENTION_PROTECTED_BRANCHES`: comma-separated exact branch names that are never removed. The project's main branch (or `MAIN_BRANCH`) is always protected.
+- `REPORT_RETENTION_STALE_BRANCH_DRY_RUN`: `true` only logs what would be deleted (visible in `wrangler tail`).
+
+It runs only through the scheduled cron and works without the other retention vars.
+
 ## Validate via GET /api/ping
 
 ```bash

@@ -103,6 +103,17 @@ curl -sS -X POST http://localhost:3000/api/projects/main-branch \
 
 It returns `404` if the branch has no completed reports (it does not fall back to another branch) or if the report doesn't contain the requested plugin. The `/reports/tree` page shows a `latest` link next to each branch.
 
+### Scopes API
+
+`GET /api/scopes` is public and lists every repo/branch that has completed reports, with the latest report of each, sorted by repo and then branch. Add `?repo=repo_name` to list only one repo:
+
+```shell
+$ curl -sS http://localhost:3000/api/scopes
+{"scopes":[{"repo":"service-a","branch":"main","mainBranch":"main","latestUrl":"/reports/latest?repo=service-a&branch=main","latest":{"id":"…","name":"…","completedAt":"…","url":"/…"}}]}
+```
+
+`mainBranch` is the project's main branch (falls back to `MAIN_BRANCH`). URLs are absolute when `PUBLIC_URL` is set.
+
 ### Report retention
 
 Automated report retention can delete old reports to reduce disk or storage costs. It is disabled by default and enabled only when at least one retention env var is set:
@@ -111,3 +122,13 @@ Automated report retention can delete old reports to reduce disk or storage cost
 - `REPORT_RETENTION_MAX_REPORT_AGE_DAYS`: delete reports older than this positive number of days. The newest completed report per branch is always preserved.
 
 Both strategies can be enabled together. Retention does not change public history download limits or manual delete behavior.
+
+#### Stale branch retention
+
+The options above always keep the newest report of every branch, so merged or deleted branches stay forever. To remove them:
+
+- `REPORT_RETENTION_STALE_BRANCH_DAYS`: delete **all** reports of a branch whose newest completed report is older than this positive number of days. A branch with a draft updated within that period is skipped.
+- `REPORT_RETENTION_PROTECTED_BRANCHES`: comma-separated branch names (exact match, all repos) that are never removed, e.g. `master,dev`. The project's main branch (or `MAIN_BRANCH`) is always protected.
+- `REPORT_RETENTION_STALE_BRANCH_DRY_RUN`: `true` only logs what would be deleted. Try it before enabling deletion.
+
+Stale branch retention runs in the scheduled sweep only (hourly for Docker, the cron for Cloudflare), not after report completion.
