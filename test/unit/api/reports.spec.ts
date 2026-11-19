@@ -1544,7 +1544,8 @@ describe("reports API", () => {
     });
   });
 
-  it("encodes plugin entrypoint redirects", async () => {
+  // Windows does not allow `"<>` in file names, so this case can only run on POSIX systems.
+  it.skipIf(process.platform === "win32")("encodes plugin entrypoint redirects", async () => {
     await withApp(async ({ app }) => {
       const dangerousPlugin = 'x"><img src=x onerror=alert(1)>';
 

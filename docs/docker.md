@@ -83,6 +83,25 @@ Optional vars: `S3_PREFIX`, `S3_REPORTS_PREFIX`, `S3_ASSETS_PREFIX`, `S3_SESSION
 For Cloudflare R2, use `S3_REGION=auto`, `S3_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com`, and `S3_FORCE_PATH_STYLE=false`.
 Bucket-specific R2 endpoints are normalized internally.
 
+## Azure Blob Storage
+
+Use `STORAGE_BACKEND=azure` to store reports in an existing Azure Blob Storage container:
+
+```bash
+STORAGE_BACKEND=azure
+AZURE_CONTAINER=allure-reports
+AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net"
+```
+
+Required vars: `AZURE_CONTAINER` (the container must already exist) and exactly one of:
+
+- `AZURE_STORAGE_CONNECTION_STRING`
+- `AZURE_STORAGE_ACCOUNT_URL`, for example `https://<account>.blob.core.windows.net`. A SAS token may be included as the URL query string, for example `?sv=...&sig=...`.
+
+Optional vars: `AZURE_PREFIX`, `AZURE_REPORTS_PREFIX`, `AZURE_ASSETS_PREFIX`.
+
+Transient Azure responses (HTTP 429, 500, and 503) are returned to clients as the same temporary errors used by the other storage backends.
+
 ## Report retention
 
 Automated retention can delete old reports to reduce disk or S3 storage costs. It is disabled by default and enabled only when at least one env var is set:
