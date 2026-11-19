@@ -33,6 +33,15 @@ export interface ListHistoryQuery {
   limit?: number;
 }
 
+export interface ListCompletedScopesQuery {
+  repo?: string;
+}
+
+/** Branches are stale when their newest completed report and every draft were last touched before `thresholdIso`. */
+export interface StaleBranchQuery {
+  thresholdIso: string;
+}
+
 export interface UpsertProjectMainBranchInput {
   repo: string;
   mainBranch: string;
@@ -74,7 +83,9 @@ export interface ReportRepository {
   listHistory(query: ListHistoryQuery): Promise<Report[]>;
   listCompleted(query: ListReportsQuery): Promise<Report[]>;
   listRetentionCandidates(query: ListRetentionCandidatesQuery): Promise<Report[]>;
-  listCompletedScopes(): Promise<Array<{ branch: string; repo: string }>>;
+  listStaleBranchReports(query: StaleBranchQuery): Promise<Report[]>;
+  deleteStaleBranchReport(report: Report, query: StaleBranchQuery): Promise<boolean>;
+  listCompletedScopes(query?: ListCompletedScopesQuery): Promise<Array<{ branch: string; repo: string }>>;
   findLatestByRepoAndBranch(repo: string, branch: string): Promise<Report | null>;
   close(): Promise<void>;
 }

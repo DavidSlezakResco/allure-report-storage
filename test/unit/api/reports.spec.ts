@@ -1448,6 +1448,8 @@ describe("reports API", () => {
       expect(html).toContain("tree-child-1");
       expect(html).toContain('href="/tree-main-1"');
       expect(html).toContain('href="/tree-child-1"');
+      expect(html).toContain(`href="/reports/latest?repo=qameta%2Fallure-report-storage&amp;branch=trunk"`);
+      expect(html).toContain(`href="/reports/latest?repo=qameta%2Fallure-report-storage&amp;branch=feature"`);
       expect(html).toContain(formatReportCreatedAt(mainCreatedAt));
       expect(html).toContain(formatReportCreatedAt(childCreatedAt));
       expect(html).toContain(`<time datetime="${mainCreatedAt}">${formatReportCreatedAt(mainCreatedAt)}</time>`);
@@ -1455,7 +1457,185 @@ describe("reports API", () => {
     });
   });
 
-  it("encodes plugin entrypoint redirects", async () => {
+  it("redirects to the latest completed report of a branch", async () => {
+    await withApp(async ({ app }) => {
+      const publishWithFiles = async (reportId: string, branch: string, files: string[]): Promise<void> => {
+        let response = await requestAuthorized(app, `/api/reports/${reportId}`, {
+          method: "PUT",
+          ...jsonBody({ repo: REPO, branch, name: reportId }),
+        });
+        expect(response.status).toBe(200);
+
+        for (const file of files) {
+          response = await requestAuthorized(app, `/api/reports/${reportId}/upload`, {
+            body: createUploadFormData(file, "<html></html>"),
+            method: "POST",
+          });
+          expect(response.status).toBe(200);
+        }
+
+        response = await requestAuthorized(app, `/api/reports/${reportId}/complete`, {
+          method: "POST",
+          ...jsonBody({ historyPoint: { total: 1 } }),
+        });
+        expect(response.status).toBe(200);
+
+        await pauseForHistoryOrdering();
+      };
+      const latest = (query: string) => app.request(`/reports/latest?${query}`, { redirect: "manual" });
+      const repoQuery = `repo=${encodeURIComponent(REPO)}`;
+
+      await publishWithFiles("main-old", "main", ["awesome/index.html"]);
+      await publishWithFiles("main-new", "main", ["index.html", "awesome/index.html", "classic/index.html"]);
+      await publishWithFiles("feature-1", "feature", ["index.html"]);
+
+      let response = await requestAuthorized(app, "/api/reports/main-pending", {
+        method: "PUT",
+        ...jsonBody({ repo: REPO, branch: "main", name: "pending" }),
+      });
+      expect(response.status).toBe(200);
+
+      response = await latest(repoQuery);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/main-new/index.html");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+
+      response = await latest(`${repoQuery}&branch=feature`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/feature-1/index.html");
+
+      response = await latest(`${repoQuery}&plugin=classic`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/main-new/classic/index.html");
+
+      response = await latest(`${repoQuery}&plugin=awesome&view=charts`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/main-new/awesome/index.html#charts");
+
+      response = await latest(`${repoQuery}&plugin=missing`);
+      expect(response.status).toBe(404);
+      expect(await readJson(response)).toEqual({ error: "plugin not found" });
+
+      response = await latest(`${repoQuery}&branch=unknown`);
+      expect(response.status).toBe(404);
+      expect(await readJson(response)).toEqual({ error: "report not found" });
+
+      for (const plugin of ["..", "a/b", "../x"]) {
+        response = await latest(`${repoQuery}&plugin=${encodeURIComponent(plugin)}`);
+        expect(response.status).toBe(400);
+      }
+
+      response = await latest(`${repoQuery}&view=other`);
+      expect(response.status).toBe(400);
+
+      response = await latest("branch=main");
+      expect(response.status).toBe(400);
+      expect(await readJson(response)).toEqual({ error: "repo is required" });
+
+      response = await requestBootstrap(app, "/api/projects/main-branch", {
+        method: "POST",
+        ...jsonBody({ mainBranch: "feature", repo: REPO }),
+      });
+      expect(response.status).toBe(200);
+
+      response = await latest(repoQuery);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/feature-1/index.html");
+    });
+  });
+
+  it("lists completed scopes with their latest report without a token", async () => {
+    await withApp(
+      async ({ app }) => {
+        const publicUrl = "https://reports.example.com";
+        const scopeUrl = (repo: string, branch: string) =>
+          `${publicUrl}/reports/latest?${new URLSearchParams({ repo, branch }).toString()}`;
+
+        let response = await requestBootstrap(app, "/api/projects/main-branch", {
+          method: "POST",
+          ...jsonBody({ mainBranch: "trunk", repo: OTHER_REPO }),
+        });
+        expect(response.status).toBe(200);
+
+        await publishHistoryPoint(app, "main-old", "main", "main-old");
+        await publishHistoryPoint(app, "main-new", "main", "main-new");
+        await publishHistoryPoint(app, "feature-1", "feature", "feature-1");
+        await publishHistoryPoint(app, "other-trunk", "trunk", "other-trunk", OTHER_REPO);
+
+        response = await requestAuthorized(app, "/api/reports/draft-only", {
+          method: "PUT",
+          ...jsonBody({ repo: REPO, branch: "draft-branch" }),
+        });
+        expect(response.status).toBe(200);
+
+        response = await app.request("/api/scopes");
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(await readJson(response)).toEqual({
+          scopes: [
+            {
+              repo: REPO,
+              branch: "feature",
+              mainBranch: "main",
+              latestUrl: scopeUrl(REPO, "feature"),
+              latest: {
+                id: "feature-1",
+                name: "feature-1",
+                completedAt: expect.any(String),
+                url: `${publicUrl}/feature-1`,
+              },
+            },
+            {
+              repo: REPO,
+              branch: "main",
+              mainBranch: "main",
+              latestUrl: scopeUrl(REPO, "main"),
+              latest: { id: "main-new", name: "main-new", completedAt: expect.any(String), url: `${publicUrl}/main-new` },
+            },
+            {
+              repo: OTHER_REPO,
+              branch: "trunk",
+              mainBranch: "trunk",
+              latestUrl: scopeUrl(OTHER_REPO, "trunk"),
+              latest: {
+                id: "other-trunk",
+                name: "other-trunk",
+                completedAt: expect.any(String),
+                url: `${publicUrl}/other-trunk`,
+              },
+            },
+          ],
+        });
+
+        response = await app.request(`/api/scopes?repo=${encodeURIComponent(OTHER_REPO)}`);
+        expect(response.status).toBe(200);
+        expect((await readJson<{ scopes: Array<{ branch: string }> }>(response)).scopes.map((s) => s.branch)).toEqual([
+          "trunk",
+        ]);
+
+        response = await app.request("/api/scopes?repo=unknown");
+        expect(response.status).toBe(200);
+        expect(await readJson(response)).toEqual({ scopes: [] });
+      },
+      { publicUrl: "https://reports.example.com" },
+    );
+  });
+
+  it("returns relative scope URLs when PUBLIC_URL is unset", async () => {
+    await withApp(async ({ app }) => {
+      await publishHistoryPoint(app, "only", "main", "only");
+
+      const response = await app.request("/api/scopes");
+      const { scopes } = await readJson<{ scopes: Array<{ latestUrl: string; latest: { url: string } }> }>(response);
+
+      expect(scopes).toHaveLength(1);
+      expect(scopes[0].latest.url).toBe("/only");
+      expect(scopes[0].latestUrl).toBe(`/reports/latest?repo=${encodeURIComponent(REPO)}&branch=main`);
+    });
+  });
+
+  // Windows does not allow `"<>` in file names, so this case can only run on POSIX systems.
+  it.skipIf(process.platform === "win32")("encodes plugin entrypoint redirects", async () => {
     await withApp(async ({ app }) => {
       const dangerousPlugin = 'x"><img src=x onerror=alert(1)>';
 

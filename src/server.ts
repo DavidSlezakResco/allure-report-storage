@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { S3Client } from "@aws-sdk/client-s3";
+import { BlobServiceClient, ContainerClient } from "@azure/storage-blob";
 import { schedule, type ScheduledTask } from "node-cron";
 
 import { buildApp } from "./app.js";
@@ -8,11 +9,12 @@ import type { StaticFileStore } from "./model.js";
 import { SqliteAccessTokenRepository } from "./repositories/sqlite/accessTokens.js";
 import { SqliteProjectRepository } from "./repositories/sqlite/projects.js";
 import { SqliteReportRepository } from "./repositories/sqlite/reports.js";
+import { AzureStore } from "./storage/azure.js";
 import { FsStore } from "./storage/fs.js";
 import { S3Store } from "./storage/s3.js";
 import { createErrorLog } from "./utils/error.js";
 import { normalizePublicUrl } from "./utils/http.js";
-import { cleanupReportRetention, parseRetentionPolicy } from "./utils/retention.js";
+import { cleanupReportRetention, isRetentionEnabled, parseRetentionPolicy } from "./utils/retention.js";
 
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "0.0.0.0";
@@ -102,6 +104,14 @@ const resolveForcePathStyle = (endpoint: string | undefined): boolean => {
   return parseBooleanEnv("S3_FORCE_PATH_STYLE", endpoint !== undefined);
 };
 
+const toContainerUrl = (accountUrl: string, containerName: string): string => {
+  const url = new URL(accountUrl);
+
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/${encodeURIComponent(containerName)}`;
+
+  return url.toString();
+};
+
 const createFileStore = (): StaticFileStore => {
   if (storageBackend === "fs") {
     return new FsStore(path.join(dataDir, "files"));
@@ -143,6 +153,29 @@ const createFileStore = (): StaticFileStore => {
     });
   }
 
+  if (storageBackend === "azure") {
+    const containerName = requiredEnv("AZURE_CONTAINER");
+    const connectionString = optionalEnv("AZURE_STORAGE_CONNECTION_STRING");
+    const accountUrl = optionalEnv("AZURE_STORAGE_ACCOUNT_URL");
+
+    if ((connectionString && accountUrl) || (!connectionString && !accountUrl)) {
+      throw new Error(
+        "Exactly one of AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT_URL is required when STORAGE_BACKEND=azure",
+      );
+    }
+
+    const containerClient = connectionString
+      ? BlobServiceClient.fromConnectionString(connectionString).getContainerClient(containerName)
+      : new ContainerClient(toContainerUrl(accountUrl as string, containerName));
+
+    return new AzureStore({
+      assetsPrefix: optionalEnv("AZURE_ASSETS_PREFIX"),
+      client: containerClient,
+      prefix: optionalEnv("AZURE_PREFIX"),
+      reportsPrefix: optionalEnv("AZURE_REPORTS_PREFIX"),
+    });
+  }
+
   throw new Error(`Unsupported STORAGE_BACKEND value: ${storageBackend}`);
 };
 
@@ -150,13 +183,13 @@ const startRetentionSweep = (input: {
   fileStore: StaticFileStore;
   repositories: Parameters<typeof cleanupReportRetention>[0]["repositories"];
 }): ScheduledTask | undefined => {
-  if (retentionPolicy.maxReportsPerBranch === undefined && retentionPolicy.maxReportAgeMs === undefined) {
+  if (!isRetentionEnabled(retentionPolicy)) {
     return undefined;
   }
 
   const sweep = async () => {
     try {
-      await cleanupReportRetention({ ...input, policy: retentionPolicy });
+      await cleanupReportRetention({ ...input, mainBranch, policy: retentionPolicy });
     } catch (error: unknown) {
       console.error(createErrorLog("report retention sweep failed", error));
     }

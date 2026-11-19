@@ -1,4 +1,5 @@
 import type { Project, Report } from "../model.js";
+import type { Repositories } from "../repositories/api.js";
 
 const htmlEscapeMap: Record<string, string> = {
   "&": "&amp;",
@@ -116,8 +117,8 @@ const groupReportsByBranch = (reports: Report[]): Map<string, Report[]> => {
 const renderReportItem = (report: Report): string =>
   `<li><a href="${escapeHtml(buildReportUrl(report.id))}" target="_blank">${escapeHtml(report.id)}</a> <time datetime="${escapeHtml(report.createdAt)}">${escapeHtml(formatReportCreatedAt(report.createdAt))}</time></li>`;
 
-const renderBranchNode = (label: string, childrenHtml: string): string =>
-  `<li><strong>${escapeHtml(label)}</strong><ul>${childrenHtml}</ul></li>`;
+const renderBranchNode = (label: string, childrenHtml: string, repo: string): string =>
+  `<li><strong>${escapeHtml(label)}</strong> <a class="latest" href="${escapeHtml(buildLatestReportUrl(repo, label))}" target="_blank">latest</a><ul>${childrenHtml}</ul></li>`;
 
 export const mapReport = (report: Report) => ({
   id: report.id,
@@ -137,10 +138,71 @@ export const mapProject = (project: Project) => ({
 
 export const buildReportUrl = (reportId: string): string => `/${encodeURIComponent(reportId)}`;
 
+export const buildLatestReportUrl = (repo: string, branch: string): string =>
+  `/reports/latest?${new URLSearchParams({ repo, branch }).toString()}`;
+
 export const buildReportFileUrl = (reportId: string, ...segments: string[]): string =>
   `${buildReportUrl(reportId)}/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
 
 export const createReportId = (): string => crypto.randomUUID();
+
+export interface LatestScope {
+  repo: string;
+  branch: string;
+  mainBranch: string;
+  latestUrl: string;
+  latest: {
+    id: string;
+    name: string | null;
+    completedAt: string | null;
+    url: string;
+  };
+}
+
+const compareCodePoints = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
+export const listLatestScopes = async (
+  repositories: Pick<Repositories, "projects" | "reports">,
+  options: { defaultMainBranch: string; publicUrl?: string; repo?: string },
+): Promise<LatestScope[]> => {
+  const prefix = options.publicUrl ?? "";
+  const scopes = await repositories.reports.listCompletedScopes({ repo: options.repo });
+  const mainBranches = new Map<string, string>();
+  const result: LatestScope[] = [];
+
+  scopes.sort((left, right) => compareCodePoints(left.repo, right.repo) || compareCodePoints(left.branch, right.branch));
+
+  for (const { repo, branch } of scopes) {
+    let mainBranch = mainBranches.get(repo);
+
+    if (mainBranch === undefined) {
+      mainBranch = (await repositories.projects.findByRepo(repo))?.mainBranch ?? options.defaultMainBranch;
+      mainBranches.set(repo, mainBranch);
+    }
+
+    const latest = await repositories.reports.findLatestByRepoAndBranch(repo, branch);
+
+    // The report can be deleted between the scope listing and this lookup.
+    if (!latest) {
+      continue;
+    }
+
+    result.push({
+      repo,
+      branch,
+      mainBranch,
+      latestUrl: `${prefix}${buildLatestReportUrl(repo, branch)}`,
+      latest: {
+        id: latest.id,
+        name: latest.name,
+        completedAt: latest.completedAt,
+        url: `${prefix}${buildReportUrl(latest.id)}`,
+      },
+    });
+  }
+
+  return result;
+};
 
 export const renderReportsTreePage = (input: { mainBranch: string; repo: string; reports: Report[] }): string => {
   const groupedReports = groupReportsByBranch(input.reports);
@@ -154,9 +216,10 @@ export const renderReportsTreePage = (input: { mainBranch: string; repo: string;
     [
       ...mainBranchReports.map(renderReportItem),
       ...childBranches.map((branch) =>
-        renderBranchNode(branch, (groupedReports.get(branch) ?? []).map(renderReportItem).join("")),
+        renderBranchNode(branch, (groupedReports.get(branch) ?? []).map(renderReportItem).join(""), input.repo),
       ),
     ].join(""),
+    input.repo,
   );
 
   return `<!doctype html>
@@ -202,6 +265,11 @@ main {
 
 time {
   color: #011228ad;
+}
+
+.latest {
+  color: #011228ad;
+  font-size: 12px;
 }
 
 ul {

@@ -8,7 +8,7 @@ The Allure Report Storage service allows to publish Allure Report reports to and
 - 📚 [Documentation](https://allurereport.org/docs/) – discover official documentation for Allure Report
 - ❓ [Questions and Support](https://github.com/orgs/allure-framework/discussions/categories/questions-support) – get help from the team and community
 - 📢 [Official annoucements](https://github.com/orgs/allure-framework/discussions/categories/announcements) – be in touch with the latest updates
-- 💬 [General Discussion](https://github.com/orgs/allure-framework/discussions/categories/general-discussion)  – engage in casual conversations, share insights and ideas with the community
+- 💬 [General Discussion](https://github.com/orgs/allure-framework/discussions/categories/general-discussion) – engage in casual conversations, share insights and ideas with the community
 
 ## Usage
 
@@ -84,10 +84,35 @@ If your main branch doesn't call `main`, you can specify a custom one to compare
 
 ```bash
 curl -sS -X POST http://localhost:3000/api/projects/main-branch \
-  -H "Authorization: Bearer storage_bootstrap_token" \
+  -H "Authorization: Bearer dev-bootstrap-token" \
   -H "Content-Type: application/json" \
   -d '{ "repo": "repo_name", "main_branch": "main_branch_name"}'
+  $ curl -sS -X POST http://localhost:3000/api/token   -H "Authorization: Bearer dev-bootstrap-token"
 ```
+
+### Latest report link
+
+`GET /reports/latest` is public, like `/reports/tree`. It redirects to the newest completed report of a branch, so you can share or bookmark the link:
+
+```text
+/reports/latest?repo=repo_name                         # project main branch (falls back to MAIN_BRANCH)
+/reports/latest?repo=repo_name&branch=feature-x        # specific branch
+/reports/latest?repo=repo_name&plugin=awesome          # specific plugin's index.html
+/reports/latest?repo=repo_name&view=charts             # open the charts view (same as appending #charts)
+```
+
+It returns `404` if the branch has no completed reports (it does not fall back to another branch) or if the report doesn't contain the requested plugin. The `/reports/tree` page shows a `latest` link next to each branch.
+
+### Scopes API
+
+`GET /api/scopes` is public and lists every repo/branch that has completed reports, with the latest report of each, sorted by repo and then branch. Add `?repo=repo_name` to list only one repo:
+
+```shell
+$ curl -sS http://localhost:3000/api/scopes
+{"scopes":[{"repo":"service-a","branch":"main","mainBranch":"main","latestUrl":"/reports/latest?repo=service-a&branch=main","latest":{"id":"…","name":"…","completedAt":"…","url":"/…"}}]}
+```
+
+`mainBranch` is the project's main branch (falls back to `MAIN_BRANCH`). URLs are absolute when `PUBLIC_URL` is set.
 
 ### Report retention
 
@@ -97,3 +122,13 @@ Automated report retention can delete old reports to reduce disk or storage cost
 - `REPORT_RETENTION_MAX_REPORT_AGE_DAYS`: delete reports older than this positive number of days. The newest completed report per branch is always preserved.
 
 Both strategies can be enabled together. Retention does not change public history download limits or manual delete behavior.
+
+#### Stale branch retention
+
+The options above always keep the newest report of every branch, so merged or deleted branches stay forever. To remove them:
+
+- `REPORT_RETENTION_STALE_BRANCH_DAYS`: delete **all** reports of a branch whose newest completed report is older than this positive number of days. A branch with a draft updated within that period is skipped.
+- `REPORT_RETENTION_PROTECTED_BRANCHES`: comma-separated branch names (exact match, all repos) that are never removed, e.g. `master,dev`. The project's main branch (or `MAIN_BRANCH`) is always protected.
+- `REPORT_RETENTION_STALE_BRANCH_DRY_RUN`: `true` only logs what would be deleted. Try it before enabling deletion.
+
+Stale branch retention runs in the scheduled sweep only (hourly for Docker, the cron for Cloudflare), not after report completion.

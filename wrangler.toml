@@ -3,7 +3,8 @@ main = "src/worker.ts"
 compatibility_date = "2026-05-06"
 
 [triggers]
-# Runs scheduled report retention cleanup. Retention stays disabled unless vars below are set.
+# Runs scheduled report retention cleanup, including stale branch retention.
+# Retention stays disabled unless at least one REPORT_RETENTION_* var below is set.
 crons = ["0 3 * * *"]
 
 [[d1_databases]]
@@ -17,9 +18,20 @@ binding = "REPORTS_BUCKET"
 bucket_name = "allure-report-storage"
 
 [vars]
+# Prefer `wrangler secret put ACCESS_TOKEN` / `wrangler secret put SECRET` in production.
 ACCESS_TOKEN = "change-me"
 MAIN_BRANCH = "main"
 SECRET = "change-me-secret"
+# Optional public origin embedded in issued tokens and /api/scopes URLs, e.g. behind TLS termination.
+# PUBLIC_URL = "https://reports.example.com"
+# Optional R2 key prefixes (defaults: no shared prefix, "files", "assets").
+# R2_PREFIX = "allure"
+# R2_REPORTS_PREFIX = "files"
+# R2_ASSETS_PREFIX = "assets"
 # Optional report retention. Uncomment to enable.
 # REPORT_RETENTION_MAX_REPORTS_PER_BRANCH = "20"
 # REPORT_RETENTION_MAX_REPORT_AGE_DAYS = "30"
+# Optional stale branch retention (runs only in the cron above). The main branch is always kept.
+# REPORT_RETENTION_STALE_BRANCH_DAYS = "30"
+# REPORT_RETENTION_PROTECTED_BRANCHES = "master,dev"
+# REPORT_RETENTION_STALE_BRANCH_DRY_RUN = "true"
