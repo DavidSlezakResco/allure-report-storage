@@ -116,8 +116,8 @@ const groupReportsByBranch = (reports: Report[]): Map<string, Report[]> => {
 const renderReportItem = (report: Report): string =>
   `<li><a href="${escapeHtml(buildReportUrl(report.id))}" target="_blank">${escapeHtml(report.id)}</a> <time datetime="${escapeHtml(report.createdAt)}">${escapeHtml(formatReportCreatedAt(report.createdAt))}</time></li>`;
 
-const renderBranchNode = (label: string, childrenHtml: string): string =>
-  `<li><strong>${escapeHtml(label)}</strong><ul>${childrenHtml}</ul></li>`;
+const renderBranchNode = (label: string, childrenHtml: string, repo: string): string =>
+  `<li><strong>${escapeHtml(label)}</strong> <a class="latest" href="${escapeHtml(buildLatestReportUrl(repo, label))}" target="_blank">latest</a><ul>${childrenHtml}</ul></li>`;
 
 export const mapReport = (report: Report) => ({
   id: report.id,
@@ -137,6 +137,9 @@ export const mapProject = (project: Project) => ({
 
 export const buildReportUrl = (reportId: string): string => `/${encodeURIComponent(reportId)}`;
 
+export const buildLatestReportUrl = (repo: string, branch: string): string =>
+  `/reports/latest?${new URLSearchParams({ repo, branch }).toString()}`;
+
 export const buildReportFileUrl = (reportId: string, ...segments: string[]): string =>
   `${buildReportUrl(reportId)}/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
 
@@ -154,9 +157,10 @@ export const renderReportsTreePage = (input: { mainBranch: string; repo: string;
     [
       ...mainBranchReports.map(renderReportItem),
       ...childBranches.map((branch) =>
-        renderBranchNode(branch, (groupedReports.get(branch) ?? []).map(renderReportItem).join("")),
+        renderBranchNode(branch, (groupedReports.get(branch) ?? []).map(renderReportItem).join(""), input.repo),
       ),
     ].join(""),
+    input.repo,
   );
 
   return `<!doctype html>
@@ -202,6 +206,11 @@ main {
 
 time {
   color: #011228ad;
+}
+
+.latest {
+  color: #011228ad;
+  font-size: 12px;
 }
 
 ul {

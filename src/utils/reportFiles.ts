@@ -76,6 +76,34 @@ export const resolveReportEntrypointUrl = async (
   return { url: buildReportFileUrl(report.id, ...entrypoint.split("/")) };
 };
 
+export const resolveLatestReportUrl = async (
+  reportsRepository: ReportRepository,
+  fileStore: StaticFileStore,
+  input: { branch: string; plugin: string | null; repo: string },
+): Promise<{ url: string } | { error: "entrypoint not found" | "plugin not found" | "report not found" }> => {
+  const report = await reportsRepository.findLatestByRepoAndBranch(input.repo, input.branch);
+
+  if (!report) {
+    return { error: "report not found" };
+  }
+
+  if (input.plugin) {
+    if (!(await fileStore.exists(report.id, `${input.plugin}/index.html`))) {
+      return { error: "plugin not found" };
+    }
+
+    return { url: buildReportFileUrl(report.id, input.plugin, "index.html") };
+  }
+
+  const entrypoint = await resolveReportEntrypoint(fileStore, report.id);
+
+  if (!entrypoint) {
+    return { error: "entrypoint not found" };
+  }
+
+  return { url: buildReportFileUrl(report.id, ...entrypoint.split("/")) };
+};
+
 export const getReportFile = async (
   reportsRepository: ReportRepository,
   fileStore: StaticFileStore,

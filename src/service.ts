@@ -25,7 +25,7 @@ import {
   unauthorizedResponse,
 } from "./utils/http.js";
 import { normalizeUploadPath } from "./utils/path.js";
-import { getReportFile, resolveReportEntrypointUrl } from "./utils/reportFiles.js";
+import { getReportFile, resolveLatestReportUrl, resolveReportEntrypointUrl } from "./utils/reportFiles.js";
 import {
   buildReportFileUrl,
   buildReportUrl,
@@ -581,6 +581,46 @@ export const createHttpApp = <Bindings extends object = Record<string, never>>(
     const reports = await c.get("repositories").reports.listCompleted({ repo });
 
     return c.html(renderReportsTreePage({ mainBranch, repo, reports }), 200);
+  });
+
+  app.get("/reports/latest", async (c) => {
+    const noStore = { "cache-control": "no-store" };
+    const repo = normalizeStringParam(c.req.query("repo"));
+
+    if (!repo) {
+      return c.json({ error: "repo is required" }, 400, noStore);
+    }
+
+    const rawPlugin = normalizeStringParam(c.req.query("plugin"));
+    const plugin = rawPlugin ? normalizeUploadPath(rawPlugin) : null;
+
+    if (rawPlugin && (!plugin || plugin.includes("/"))) {
+      return c.json({ error: "plugin is invalid" }, 400, noStore);
+    }
+
+    const view = normalizeStringParam(c.req.query("view"));
+
+    if (view && view !== "charts") {
+      return c.json({ error: "view must be one of: charts" }, 400, noStore);
+    }
+
+    const branch =
+      normalizeStringParam(c.req.query("branch")) ??
+      (await c.get("repositories").projects.findByRepo(repo))?.mainBranch ??
+      c.get("mainBranch");
+    const latest = await resolveLatestReportUrl(c.get("repositories").reports, c.get("fileStore"), {
+      branch,
+      plugin,
+      repo,
+    });
+
+    if ("error" in latest) {
+      return c.json({ error: latest.error }, 404, noStore);
+    }
+
+    c.header("cache-control", "no-store");
+
+    return c.redirect(view ? `${latest.url}#${view}` : latest.url);
   });
 
   app.all("/api/*", (c) => {

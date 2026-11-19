@@ -1448,10 +1448,99 @@ describe("reports API", () => {
       expect(html).toContain("tree-child-1");
       expect(html).toContain('href="/tree-main-1"');
       expect(html).toContain('href="/tree-child-1"');
+      expect(html).toContain(`href="/reports/latest?repo=qameta%2Fallure-report-storage&amp;branch=trunk"`);
+      expect(html).toContain(`href="/reports/latest?repo=qameta%2Fallure-report-storage&amp;branch=feature"`);
       expect(html).toContain(formatReportCreatedAt(mainCreatedAt));
       expect(html).toContain(formatReportCreatedAt(childCreatedAt));
       expect(html).toContain(`<time datetime="${mainCreatedAt}">${formatReportCreatedAt(mainCreatedAt)}</time>`);
       expect(html).toContain(`<time datetime="${childCreatedAt}">${formatReportCreatedAt(childCreatedAt)}</time>`);
+    });
+  });
+
+  it("redirects to the latest completed report of a branch", async () => {
+    await withApp(async ({ app }) => {
+      const publishWithFiles = async (reportId: string, branch: string, files: string[]): Promise<void> => {
+        let response = await requestAuthorized(app, `/api/reports/${reportId}`, {
+          method: "PUT",
+          ...jsonBody({ repo: REPO, branch, name: reportId }),
+        });
+        expect(response.status).toBe(200);
+
+        for (const file of files) {
+          response = await requestAuthorized(app, `/api/reports/${reportId}/upload`, {
+            body: createUploadFormData(file, "<html></html>"),
+            method: "POST",
+          });
+          expect(response.status).toBe(200);
+        }
+
+        response = await requestAuthorized(app, `/api/reports/${reportId}/complete`, {
+          method: "POST",
+          ...jsonBody({ historyPoint: { total: 1 } }),
+        });
+        expect(response.status).toBe(200);
+
+        await pauseForHistoryOrdering();
+      };
+      const latest = (query: string) => app.request(`/reports/latest?${query}`, { redirect: "manual" });
+      const repoQuery = `repo=${encodeURIComponent(REPO)}`;
+
+      await publishWithFiles("main-old", "main", ["awesome/index.html"]);
+      await publishWithFiles("main-new", "main", ["index.html", "awesome/index.html", "classic/index.html"]);
+      await publishWithFiles("feature-1", "feature", ["index.html"]);
+
+      let response = await requestAuthorized(app, "/api/reports/main-pending", {
+        method: "PUT",
+        ...jsonBody({ repo: REPO, branch: "main", name: "pending" }),
+      });
+      expect(response.status).toBe(200);
+
+      response = await latest(repoQuery);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/main-new/index.html");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+
+      response = await latest(`${repoQuery}&branch=feature`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/feature-1/index.html");
+
+      response = await latest(`${repoQuery}&plugin=classic`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/main-new/classic/index.html");
+
+      response = await latest(`${repoQuery}&plugin=awesome&view=charts`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/main-new/awesome/index.html#charts");
+
+      response = await latest(`${repoQuery}&plugin=missing`);
+      expect(response.status).toBe(404);
+      expect(await readJson(response)).toEqual({ error: "plugin not found" });
+
+      response = await latest(`${repoQuery}&branch=unknown`);
+      expect(response.status).toBe(404);
+      expect(await readJson(response)).toEqual({ error: "report not found" });
+
+      for (const plugin of ["..", "a/b", "../x"]) {
+        response = await latest(`${repoQuery}&plugin=${encodeURIComponent(plugin)}`);
+        expect(response.status).toBe(400);
+      }
+
+      response = await latest(`${repoQuery}&view=other`);
+      expect(response.status).toBe(400);
+
+      response = await latest("branch=main");
+      expect(response.status).toBe(400);
+      expect(await readJson(response)).toEqual({ error: "repo is required" });
+
+      response = await requestBootstrap(app, "/api/projects/main-branch", {
+        method: "POST",
+        ...jsonBody({ mainBranch: "feature", repo: REPO }),
+      });
+      expect(response.status).toBe(200);
+
+      response = await latest(repoQuery);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/feature-1/index.html");
     });
   });
 
